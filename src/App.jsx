@@ -410,7 +410,7 @@ export default function App() {
           /* CSS RESET AGRESSIVO PARA MATAR AS LINHAS VERTICAIS */
           *, *::before, *::after { box-sizing: border-box; }
           body, html { 
-            margin: 0; padding: 0; width: 100%; height: 100%;
+            margin: 0; padding: 0; width: 100%; min-height: 100vh;
             background-color: var(--bg-dark); color: var(--text-main);
             font-family: 'Inter', sans-serif;
             overflow-x: hidden; /* Garante que não haja quebra lateral */
