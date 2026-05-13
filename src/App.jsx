@@ -1,5 +1,5 @@
-import React, { useRef, useLayoutEffect, Suspense, useState, useEffect } from 'react';
-import { Canvas } from '@react-three/fiber';
+import React, { useRef, useLayoutEffect, useEffect, useState, Suspense, createContext, useContext } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
   useGLTF, 
   Environment, 
@@ -8,18 +8,32 @@ import {
   Sparkles, 
   useProgress, 
   Html,
-  PerspectiveCamera
+  PerspectiveCamera,
+  Stats
 } from '@react-three/drei';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
-// Registra o plugin de Scroll
+// Registra o plugin do GSAP
 gsap.registerPlugin(ScrollTrigger);
 
 // ==========================================
-// 1. HOOK CUSTOMIZADO: RESPONSIVIDADE
+// 1. CONTEXT API: GERENCIAMENTO DE ESTADO GLOBAL
 // ==========================================
-// Permite que o 3D e a interface se adaptem se o usuário estiver no celular ou desktop
+// Permite que qualquer componente (HTML ou 3D) saiba qual é a cor do tema atual
+const ThemeContext = createContext();
+
+const themes = {
+  nvidia: { color: '#76b900', name: 'NVIDIA Green' },
+  studio: { color: '#ffffff', name: 'Creator White' },
+  cyber:  { color: '#ff0055', name: 'Cyberpunk Pink' }
+};
+
+// ==========================================
+// 2. HOOKS CUSTOMIZADOS (ARQUITETURA SÊNIOR)
+// ==========================================
+
+// Hook para Responsividade Perfeita (Evita linhas verticais e quebras)
 function useWindowSize() {
   const [windowSize, setWindowSize] = useState({
     width: window.innerWidth,
@@ -42,34 +56,108 @@ function useWindowSize() {
   return windowSize;
 }
 
+// Hook para capturar o mouse (usado no Parallax 3D e Cursor)
+function useMousePosition() {
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const updateMousePosition = (e) => {
+      // Normaliza a posição do mouse de -1 a 1 para cálculos 3D precisos
+      setMousePosition({ 
+        x: (e.clientX / window.innerWidth) * 2 - 1, 
+        y: -(e.clientY / window.innerHeight) * 2 + 1 
+      });
+    };
+    window.addEventListener('mousemove', updateMousePosition);
+    return () => window.removeEventListener('mousemove', updateMousePosition);
+  }, []);
+
+  return mousePosition;
+}
+
 // ==========================================
-// 2. COMPONENTE: TELA DE CARREGAMENTO (LOADER)
+// 3. COMPONENTES UI: CURSOR E LOADER
 // ==========================================
+
+function CustomCursor() {
+  const cursorRef = useRef();
+  
+  useEffect(() => {
+    const moveCursor = (e) => {
+      gsap.to(cursorRef.current, {
+        x: e.clientX,
+        y: e.clientY,
+        duration: 0.2,
+        ease: "power2.out"
+      });
+    };
+    window.addEventListener('mousemove', moveCursor);
+    return () => window.removeEventListener('mousemove', moveCursor);
+  }, []);
+
+  return (
+    <div 
+      ref={cursorRef} 
+      className="custom-cursor"
+      style={{
+        position: 'fixed', top: -10, left: -10, width: 20, height: 20,
+        borderRadius: '50%', border: '2px solid var(--theme-color)',
+        pointerEvents: 'none', zIndex: 9999, mixBlendMode: 'difference',
+        transform: 'translate(-50%, -50%)'
+      }}
+    />
+  );
+}
+
 function Loader() {
   const { progress } = useProgress();
+  const { currentTheme } = useContext(ThemeContext);
+  
   return (
     <Html center>
       <div className="loader-container">
+        <div className="loader-glitch" data-text="RTX_4090">RTX_4090</div>
         <div className="loader-bar-bg">
-          <div className="loader-bar-fill" style={{ width: `${progress}%` }}></div>
+          <div 
+            className="loader-bar-fill" 
+            style={{ width: `${progress}%`, backgroundColor: currentTheme.color, boxShadow: `0 0 15px ${currentTheme.color}` }}
+          />
         </div>
-        <p className="loader-text">INICIANDO NÚCLEOS TENSOR... {progress.toFixed(0)}%</p>
+        <p className="loader-text" style={{ color: currentTheme.color }}>
+          Sincronizando Núcleos Tensor... {progress.toFixed(0)}%
+        </p>
       </div>
     </Html>
   );
 }
 
 // ==========================================
-// 3. COMPONENTE 3D: A PLACA DE VÍDEO & COREOGRAFIA
+// 4. COMPONENTE 3D: GPU COM PARALLAX E COREOGRAFIA
 // ==========================================
-function GpuModel({ isMobile }) {
-  // Carrega o modelo
-  const { scene } = useGLTF('/geforce_rtx_4090_founders_edition.glb'); 
-  
-  // Referências para animação individual de posição e rotação
-  const groupRef = useRef();
-  const modelRef = useRef();
 
+function GpuModel({ isMobile }) {
+  const { scene } = useGLTF('/geforce_rtx_4090_founders_edition.glb'); 
+  const { currentTheme } = useContext(ThemeContext);
+  
+  // Referências independentes para evitar conflito entre o GSAP (Scroll) e o R3F (Mouse Parallax)
+  const scrollGroupRef = useRef();
+  const parallaxGroupRef = useRef();
+  
+  const mouse = useMousePosition();
+
+  // Loop de Animação de Alta Performance (60fps) para o Parallax do Mouse
+  useFrame(() => {
+    if (!isMobile && parallaxGroupRef.current) {
+      // Interpolação linear suave (Lerp) para a placa seguir o mouse com "peso"
+      const targetX = mouse.x * 0.15;
+      const targetY = mouse.y * 0.15;
+      
+      parallaxGroupRef.current.rotation.x += (targetY - parallaxGroupRef.current.rotation.x) * 0.05;
+      parallaxGroupRef.current.rotation.y += (targetX - parallaxGroupRef.current.rotation.y) * 0.05;
+    }
+  });
+
+  // Coreografia do GSAP (Atrelada ao Scroll)
   useLayoutEffect(() => {
     let ctx = gsap.context(() => {
       const tl = gsap.timeline({
@@ -77,68 +165,173 @@ function GpuModel({ isMobile }) {
           trigger: "#main-scroll-container",
           start: "top top",
           end: "bottom bottom",
-          scrub: 1.2, // Suaviza o movimento preso ao scroll
+          scrub: 1.5,
         }
       });
 
-      // Valores dinâmicos baseados no tamanho da tela
       const xOffset = isMobile ? 0 : 2.5;
-      const baseScale = isMobile ? 0.008 : 0.012;
+      const baseScale = isMobile ? 0.009 : 0.013;
 
-      // SET INICIAL (Hero Section)
-      // Placa na diagonal, majestosa
-      gsap.set(groupRef.current.position, { x: xOffset, y: -0.5, z: 0 });
-      gsap.set(modelRef.current.rotation, { x: 0.3, y: -0.6, z: 0.1 });
-      gsap.set(modelRef.current.scale, { x: baseScale, y: baseScale, z: baseScale });
+      // Estado 0: Hero (Diagonal)
+      gsap.set(scrollGroupRef.current.position, { x: xOffset, y: -0.5, z: 0 });
+      gsap.set(scrollGroupRef.current.rotation, { x: 0.3, y: -0.6, z: 0.1 });
+      gsap.set(scrollGroupRef.current.scale, { x: baseScale, y: baseScale, z: baseScale });
 
-      // ANIMAÇÃO 1: Para "Arquitetura Ada" (Move para a esquerda, mostra o perfil)
-      tl.to(groupRef.current.position, { x: isMobile ? 0 : -xOffset, y: 0, z: 1, ease: "power1.inOut" }, 0);
-      tl.to(modelRef.current.rotation, { x: 0.1, y: Math.PI / 4, z: -0.1, ease: "power1.inOut" }, 0);
+      // Estado 1: Desempenho (Vai para a esquerda, mostra o chip lateral)
+      tl.to(scrollGroupRef.current.position, { x: isMobile ? 0 : -xOffset, y: 0.2, z: 1, ease: "power2.inOut" }, 0);
+      tl.to(scrollGroupRef.current.rotation, { x: 0.1, y: Math.PI / 5, z: -0.1, ease: "power2.inOut" }, 0);
 
-      // ANIMAÇÃO 2: Para "Refrigeração" (Barrel roll dramático mostrando a parte de trás/fans)
-      tl.to(groupRef.current.position, { x: isMobile ? 0 : xOffset * 0.8, y: -1, z: 0.5, ease: "power1.inOut" }, 1);
-      tl.to(modelRef.current.rotation, { x: -0.2, y: Math.PI + 0.5, z: 0.2, ease: "power1.inOut" }, 1);
+      // Estado 2: Refrigeração (Barrel roll dramático mostrando os fans nas costas)
+      tl.to(scrollGroupRef.current.position, { x: isMobile ? 0 : xOffset * 0.9, y: -0.5, z: 0.5, ease: "power2.inOut" }, 1);
+      tl.to(scrollGroupRef.current.rotation, { x: -0.3, y: Math.PI + 0.6, z: 0.2, ease: "power2.inOut" }, 1);
 
-      // ANIMAÇÃO 3: Para "Ray Tracing" (Move centro, flutua em pé de frente)
-      tl.to(groupRef.current.position, { x: 0, y: 0, z: 1.5, ease: "power1.inOut" }, 2);
-      tl.to(modelRef.current.rotation, { x: 0, y: Math.PI * 2, z: 0, ease: "power1.inOut" }, 2);
+      // Estado 3: Specs/Ray Tracing (Centraliza e flutua majestosamente)
+      tl.to(scrollGroupRef.current.position, { x: 0, y: 0, z: 1.5, ease: "power3.inOut" }, 2);
+      tl.to(scrollGroupRef.current.rotation, { x: 0, y: Math.PI * 2, z: 0, ease: "power3.inOut" }, 2);
 
-      // ANIMAÇÃO 4: Para "CTA / Comprar" (Recua suavemente, corrige o erro de atravessar a câmera)
-      tl.to(groupRef.current.position, { x: 0, y: -0.5, z: -1, ease: "power2.out" }, 3);
-      tl.to(modelRef.current.rotation, { x: 0.15, y: Math.PI * 2.1, z: 0, ease: "power2.out" }, 3);
+      // Estado 4: CTA / Comprar (Aproxima levemente para impacto final)
+      tl.to(scrollGroupRef.current.position, { x: 0, y: -0.8, z: 2.5, ease: "power1.out" }, 3);
+      tl.to(scrollGroupRef.current.rotation, { x: 0.2, y: Math.PI * 2.15, z: 0, ease: "power1.out" }, 3);
 
     });
-
-    return () => ctx.revert(); // Cleanup do GSAP
+    return () => ctx.revert();
   }, [isMobile]);
 
   return (
-    <group ref={groupRef}>
-      <Float speed={2} rotationIntensity={0.2} floatIntensity={0.6}>
-        {/* Usamos primitive para renderizar a malha carregada */}
-        <primitive ref={modelRef} object={scene} />
+    // scrollGroupRef sofre mutação pelo GSAP
+    <group ref={scrollGroupRef}>
+      <Float speed={2.5} rotationIntensity={0.3} floatIntensity={0.8}>
+        {/* parallaxGroupRef sofre mutação pelo mouse, mantendo os movimentos independentes e fluidos */}
+        <group ref={parallaxGroupRef}>
+          <primitive object={scene} />
+        </group>
       </Float>
     </group>
   );
 }
 
 // ==========================================
-// 4. COMPONENTE PRINCIPAL: APP & UI TIMELINES
+// 5. COMPONENTES DE ILUMINAÇÃO (Reativos ao Tema)
 // ==========================================
-export default function App() {
-  const { isMobile } = useWindowSize();
 
-  // Refs para a Interface HTML
-  const section1Ref = useRef();
-  const section2Ref = useRef();
-  const section3Ref = useRef();
-  const section4Ref = useRef();
-  const section5Ref = useRef();
+function SceneLighting({ isMobile }) {
+  const { currentTheme } = useContext(ThemeContext);
+  
+  return (
+    <>
+      <Environment preset="night" />
+      <ambientLight intensity={0.15} />
+      
+      {/* Luz Branca Principal (Corta de cima) */}
+      <directionalLight position={[10, 20, 10]} intensity={2.5} color="#ffffff" castShadow />
+      
+      {/* Luz Temática Principal (Muda de cor conforme o UI) */}
+      <spotLight 
+        position={[-5, -10, -5]} 
+        angle={0.8} 
+        penumbra={1} 
+        intensity={8} 
+        color={currentTheme.color} 
+      />
+      
+      {/* Luz de Preenchimento Temática (Spotlight focado) */}
+      <spotLight 
+        position={[5, 0, -5]} 
+        angle={0.5} 
+        penumbra={1} 
+        intensity={12} 
+        color={currentTheme.color} 
+      />
+
+      {/* Partículas Temáticas Flutuantes */}
+      <Sparkles 
+        count={isMobile ? 80 : 250} 
+        scale={18} 
+        size={1.5} 
+        speed={0.4} 
+        opacity={0.5} 
+        color={currentTheme.color} 
+      />
+      
+      <ContactShadows 
+        position={[0, -3, 0]} 
+        opacity={0.85} 
+        scale={25} 
+        blur={3} 
+        far={5} 
+        color="#000000" 
+      />
+    </>
+  );
+}
+
+// ==========================================
+// 6. COMPONENTES HTML: INTERFACE, NAVEGAÇÃO E SEÇÕES
+// ==========================================
+
+function NavBar({ currentTheme }) {
+  // Função para rolagem suave ao clicar nos links (Navegação Funcional)
+  const scrollToSection = (vhMultiplier) => {
+    const targetY = window.innerHeight * vhMultiplier;
+    window.scrollTo({
+      top: targetY,
+      behavior: 'smooth'
+    });
+  };
+
+  return (
+    <nav className="navbar">
+      <div className="logo" onClick={() => scrollToSection(0)}>
+        GEFORCE<span className="logo-dot" style={{ color: currentTheme.color }}>.</span>
+      </div>
+      <div className="nav-links">
+        {/* Multiplicadores correspondem às 'telas' (0 = Hero, 1 = Desempenho, 2 = Refrigeração, 3 = Specs) */}
+        <span onClick={() => scrollToSection(0)}>Visão Geral</span>
+        <span onClick={() => scrollToSection(1)}>Desempenho</span>
+        <span onClick={() => scrollToSection(2)}>Engenharia</span>
+        <span onClick={() => scrollToSection(3)}>Especificações</span>
+      </div>
+    </nav>
+  );
+}
+
+function ThemeController() {
+  const { currentTheme, setCurrentTheme } = useContext(ThemeContext);
+
+  return (
+    <div className="theme-controller">
+      <span className="theme-label">Iluminação</span>
+      <div className="theme-buttons">
+        {Object.entries(themes).map(([key, theme]) => (
+          <button
+            key={key}
+            className={`theme-btn ${currentTheme.name === theme.name ? 'active' : ''}`}
+            style={{ backgroundColor: theme.color }}
+            onClick={() => setCurrentTheme(theme)}
+            title={theme.name}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 7. APLICAÇÃO PRINCIPAL: O CÉREBRO DA PÁGINA
+// ==========================================
+
+export default function App() {
+  // Estado Global do Tema (NVIDIA Green por padrão)
+  const [currentTheme, setCurrentTheme] = useState(themes.nvidia);
+  const { isMobile, height } = useWindowSize();
+
+  // Refs das Seções HTML para Animação do GSAP
+  const sectionRefs = [useRef(), useRef(), useRef(), useRef(), useRef()];
   const progressRef = useRef();
 
   useLayoutEffect(() => {
     let ctx = gsap.context(() => {
-      // Animação da barra de progresso no topo da tela
+      // 1. Barra de Progresso Superior
       gsap.to(progressRef.current, {
         scaleX: 1,
         ease: "none",
@@ -150,16 +343,7 @@ export default function App() {
         }
       });
 
-      // Animações dos Textos HTML (Surgem e desaparecem)
-      const sections = [
-        { ref: section1Ref, start: 0, end: 0.8 },
-        { ref: section2Ref, start: 0.8, end: 1.8 },
-        { ref: section3Ref, start: 1.8, end: 2.8 },
-        { ref: section4Ref, start: 2.8, end: 3.8 },
-        { ref: section5Ref, start: 3.8, end: 5.0 },
-      ];
-
-      // O GSAP Timeline principal do DOM
+      // 2. Animação de Entrada e Saída das Seções HTML (Fade + Blur)
       const domTl = gsap.timeline({
         scrollTrigger: {
           trigger: "#main-scroll-container",
@@ -169,266 +353,319 @@ export default function App() {
         }
       });
 
-      // Lógica matemática para fazer as divs aparecerem na hora certa do scroll
-      sections.forEach((sec, index) => {
+      // Timings matemáticos para cada uma das 5 seções
+      const timings = [
+        { start: 0, end: 0.8 },
+        { start: 0.8, end: 1.8 },
+        { start: 1.8, end: 2.8 },
+        { start: 2.8, end: 3.8 },
+        { start: 3.8, end: 5.0 },
+      ];
+
+      sectionRefs.forEach((sec, index) => {
+        if (!sec.current) return;
+        
+        // Se não for a primeira seção, ela precisa entrar na tela
         if (index !== 0) {
-          // Surge de baixo com fade in
-          domTl.fromTo(sec.ref.current, 
-            { opacity: 0, y: 100, filter: "blur(10px)" }, 
+          domTl.fromTo(sec.current, 
+            { opacity: 0, y: 150, filter: "blur(15px)" }, 
             { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.5 }, 
-            sec.start
+            timings[index].start
           );
         }
-        if (index !== sections.length - 1) {
-          // Some para cima com fade out
-          domTl.to(sec.ref.current, 
-            { opacity: 0, y: -100, filter: "blur(10px)", duration: 0.5 }, 
-            sec.end
+        // Se não for a última seção, ela precisa sair da tela
+        if (index !== sectionRefs.length - 1) {
+          domTl.to(sec.current, 
+            { opacity: 0, y: -150, filter: "blur(15px)", duration: 0.5 }, 
+            timings[index].end
           );
         }
       });
     });
 
     return () => ctx.revert();
-  }, []);
+  }, [height]); // Re-calcula se a tela mudar de tamanho drasticamente
 
   return (
-    <div id="main-scroll-container" className="main-wrapper">
-      
-      {/* ==========================================
-          5. CSS INJETADO GIGANTE (OVERHAUL VISUAL)
-          ========================================== */}
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@200;400;700;900&display=swap');
+    <ThemeContext.Provider value={{ currentTheme, setCurrentTheme }}>
+      {/* Container Principal. Removido '100vw' e 'overflow-x' arriscados para evitar linhas verticais */}
+      <div id="main-scroll-container" className="main-wrapper" style={{ '--theme-color': currentTheme.color }}>
         
-        :root {
-          --nvidia-green: #76b900;
-          --bg-dark: #07070a;
-          --text-main: #f0f0f0;
-          --text-muted: #888890;
-        }
+        {!isMobile && <CustomCursor />}
 
-        body, html { 
-          margin: 0; padding: 0; 
-          background-color: var(--bg-dark); 
-          color: var(--text-main);
-          font-family: 'Inter', sans-serif;
-          overflow-x: hidden;
-          overscroll-behavior: none;
-        }
+        {/* ==========================================
+            8. CSS INJETADO (OVERHAUL VISUAL MASSIVO)
+            ========================================== */}
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@200;400;600;800;900&display=swap');
+          
+          :root {
+            --bg-dark: #030305;
+            --text-main: #f0f0f0;
+            --text-muted: #888890;
+            --glass-bg: rgba(10, 10, 15, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.05);
+          }
 
-        /* Scrollbar Customizada */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: var(--bg-dark); }
-        ::-webkit-scrollbar-thumb { background: var(--nvidia-green); border-radius: 4px; }
+          /* CSS RESET AGRESSIVO PARA MATAR AS LINHAS VERTICAIS */
+          *, *::before, *::after { box-sizing: border-box; }
+          body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: var(--bg-dark); color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden; /* Garante que não haja quebra lateral */
+            -webkit-font-smoothing: antialiased;
+          }
 
-        .main-wrapper {
-          height: 500vh; /* 5 telas de altura para muito espaço de scroll */
-          position: relative;
-        }
+          /* Scrollbar Estilizada Reativa ao Tema */
+          ::-webkit-scrollbar { width: 6px; }
+          ::-webkit-scrollbar-track { background: var(--bg-dark); }
+          ::-webkit-scrollbar-thumb { background: var(--theme-color); border-radius: 10px; transition: background 0.3s; }
 
-        /* Barra de Progresso Leitura */
-        .reading-progress {
-          position: fixed; top: 0; left: 0; width: 100%; height: 4px;
-          background: rgba(255,255,255,0.1); z-index: 100;
-          transform-origin: 0% 50%; transform: scaleX(0);
-        }
-        .reading-progress-fill {
-          width: 100%; height: 100%; background: var(--nvidia-green);
-          box-shadow: 0 0 10px var(--nvidia-green);
-        }
+          .main-wrapper {
+            height: 500vh; /* 5 telas de altura */
+            width: 100%;
+            position: relative;
+          }
 
-        /* Navbar Premium */
-        .navbar {
-          position: fixed; top: 0; left: 0; width: 100%;
-          padding: 2rem 4rem; display: flex; justify-content: space-between;
-          align-items: center; z-index: 50; box-sizing: border-box;
-          background: linear-gradient(to bottom, rgba(7,7,10,0.8) 0%, transparent 100%);
-          backdrop-filter: blur(4px); pointer-events: none;
-        }
-        .logo { font-weight: 900; font-size: 1.8rem; letter-spacing: -1px; pointer-events: auto; cursor: pointer; }
-        .logo-dot { color: var(--nvidia-green); }
-        .nav-links { display: flex; gap: 3rem; font-weight: 400; font-size: 0.9rem; letter-spacing: 1px; text-transform: uppercase; }
-        
-        /* Container do Canvas 3D */
-        .canvas-container {
-          position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1;
-        }
+          /* Elementos UI Fixos */
+          .reading-progress {
+            position: fixed; top: 0; left: 0; width: 100%; height: 3px;
+            background: rgba(255,255,255,0.05); z-index: 100;
+            transform-origin: 0% 50%; transform: scaleX(0);
+          }
+          .reading-progress-fill {
+            width: 100%; height: 100%; background: var(--theme-color);
+            box-shadow: 0 0 15px var(--theme-color); transition: background 0.5s ease;
+          }
 
-        /* Grid de Seções UI */
-        .ui-layer {
-          position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-          z-index: 10; pointer-events: none; display: flex; align-items: center;
-        }
-        
-        .section-content {
-          padding: 0 10vw; width: 100%; box-sizing: border-box; display: flex;
-        }
+          .navbar {
+            position: fixed; top: 0; left: 0; width: 100%;
+            padding: 2rem 5%; display: flex; justify-content: space-between;
+            align-items: center; z-index: 50; 
+            background: linear-gradient(to bottom, rgba(3,3,5,0.9) 0%, transparent 100%);
+            pointer-events: none;
+          }
+          .logo { font-weight: 900; font-size: 1.8rem; letter-spacing: -1px; pointer-events: auto; cursor: pointer; transition: transform 0.3s; }
+          .logo:hover { transform: scale(1.05); }
+          .logo-dot { transition: color 0.5s ease; }
+          
+          .nav-links { display: flex; gap: 3rem; pointer-events: auto; }
+          .nav-links span { 
+            font-weight: 600; font-size: 0.85rem; letter-spacing: 2px; text-transform: uppercase; 
+            color: var(--text-muted); cursor: pointer; transition: all 0.3s ease; position: relative;
+          }
+          .nav-links span:hover { color: #fff; }
+          .nav-links span::after {
+            content: ''; position: absolute; width: 0%; height: 2px; bottom: -5px; left: 0;
+            background-color: var(--theme-color); transition: all 0.3s ease;
+          }
+          .nav-links span:hover::after { width: 100%; }
 
-        .glass-panel {
-          background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05);
-          backdrop-filter: blur(12px); border-radius: 24px; padding: 3rem;
-          max-width: 550px; pointer-events: auto;
-        }
+          /* Controlador de Tema */
+          .theme-controller {
+            position: fixed; bottom: 40px; left: 5%; z-index: 50;
+            background: var(--glass-bg); backdrop-filter: blur(10px);
+            padding: 15px 25px; border-radius: 50px; border: 1px solid var(--glass-border);
+            display: flex; align-items: center; gap: 15px; pointer-events: auto;
+          }
+          .theme-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); font-weight: 600; }
+          .theme-buttons { display: flex; gap: 10px; }
+          .theme-btn {
+            width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent;
+            cursor: pointer; transition: all 0.3s ease; outline: none; padding: 0;
+          }
+          .theme-btn:hover { transform: scale(1.2); }
+          .theme-btn.active { border-color: #fff; transform: scale(1.2); box-shadow: 0 0 10px rgba(255,255,255,0.5); }
 
-        /* Tipografia */
-        .tagline { color: var(--nvidia-green); font-weight: 700; letter-spacing: 4px; font-size: 0.85rem; text-transform: uppercase; margin-bottom: 1rem; display: block; }
-        h1 { font-size: clamp(3rem, 6vw, 5.5rem); font-weight: 900; line-height: 1; margin: 0 0 1.5rem 0; letter-spacing: -2px; }
-        h2 { font-size: clamp(2rem, 4vw, 4rem); font-weight: 800; line-height: 1.1; margin: 0 0 1rem 0; letter-spacing: -1px; }
-        p { font-size: 1.15rem; color: var(--text-muted); line-height: 1.6; font-weight: 200; margin: 0; }
-        
-        .highlight { color: #fff; font-weight: 400; }
-        .text-green { color: var(--nvidia-green); text-shadow: 0 0 30px rgba(118,185,0,0.4); }
+          /* Container 3D */
+          .canvas-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100vh; z-index: 1;
+            /* Remove qualquer pointer event do fundo para não atrapalhar o scroll */
+            pointer-events: none; 
+          }
 
-        /* Grade de Specs */
-        .specs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 2rem; }
-        .spec-item { border-left: 2px solid var(--nvidia-green); padding-left: 1rem; }
-        .spec-value { font-size: 2rem; font-weight: 700; color: #fff; display: block; }
-        .spec-label { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+          /* Estrutura das Seções HTML */
+          .ui-layer {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100vh;
+            z-index: 10; pointer-events: none; display: flex; align-items: center;
+          }
+          
+          .section-content { padding: 0 10%; width: 100%; display: flex; }
 
-        /* Botão Premium */
-        .btn-primary {
-          background: var(--nvidia-green); color: #000; border: none;
-          padding: 1.2rem 3rem; font-size: 1rem; font-weight: 800; text-transform: uppercase;
-          letter-spacing: 2px; border-radius: 50px; cursor: pointer; transition: all 0.3s ease;
-          margin-top: 2.5rem; display: inline-block; box-shadow: 0 10px 30px rgba(118,185,0,0.2);
-        }
-        .btn-primary:hover {
-          background: #8deb00; transform: translateY(-5px); box-shadow: 0 15px 40px rgba(118,185,0,0.4);
-        }
+          /* Painel de Vidro Moderno (Glassmorphism Awwwards Style) */
+          .glass-panel {
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            border-radius: 30px; padding: 3.5rem; max-width: 600px; 
+            pointer-events: auto; transition: border-color 0.5s ease;
+          }
+          .glass-panel:hover { border-color: rgba(255,255,255,0.15); }
 
-        /* Estilos do Loader */
-        .loader-container { display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-dark); width: 100vw; height: 100vh; position: absolute; top: -50vh; left: -50vw; z-index: 9999; }
-        .loader-bar-bg { width: 300px; height: 2px; background: rgba(255,255,255,0.1); margin-bottom: 20px; overflow: hidden; }
-        .loader-bar-fill { height: 100%; background: var(--nvidia-green); transition: width 0.1s ease; box-shadow: 0 0 15px var(--nvidia-green); }
-        .loader-text { color: var(--nvidia-green); font-family: monospace; font-size: 0.8rem; letter-spacing: 2px; }
+          /* Tipografia e Estilos Locais */
+          .tagline { 
+            color: var(--theme-color); font-weight: 800; letter-spacing: 5px; 
+            font-size: 0.8rem; text-transform: uppercase; margin-bottom: 1.5rem; 
+            display: inline-block; transition: color 0.5s ease;
+          }
+          h1 { font-size: clamp(3.5rem, 7vw, 6rem); font-weight: 900; line-height: 1.05; margin: 0 0 1.5rem 0; letter-spacing: -3px; }
+          h2 { font-size: clamp(2.5rem, 5vw, 4.5rem); font-weight: 800; line-height: 1.1; margin: 0 0 1.5rem 0; letter-spacing: -2px; }
+          p { font-size: 1.15rem; color: var(--text-muted); line-height: 1.7; font-weight: 400; margin: 0; }
+          
+          .text-highlight { color: #fff; font-weight: 600; }
+          .text-theme { color: var(--theme-color); transition: color 0.5s ease; }
 
-        @media (max-width: 768px) {
-          .nav-links { display: none; }
-          .navbar { padding: 1.5rem; }
-          .section-content { padding: 0 1.5rem; justify-content: center; text-align: center; }
-          .glass-panel { padding: 2rem; background: rgba(0,0,0,0.4); }
-          .specs-grid { grid-template-columns: 1fr; }
-        }
-      `}</style>
+          /* Grid Dinâmico de Especificações */
+          .specs-grid { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
+            gap: 2rem; margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--glass-border);
+          }
+          .spec-item { display: flex; flex-direction: column; gap: 5px; }
+          .spec-value { font-size: 2.5rem; font-weight: 800; color: #fff; letter-spacing: -1px; }
+          .spec-label { font-size: 0.8rem; color: var(--theme-color); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; transition: color 0.5s ease;}
 
-      {/* ==========================================
-          6. INTERFACE FIXA (Navbar e Progress)
-          ========================================== */}
-      <div className="reading-progress" ref={progressRef}>
-        <div className="reading-progress-fill"></div>
-      </div>
+          /* Botão Premium Reativo */
+          .btn-primary {
+            background: var(--theme-color); color: #000; border: none;
+            padding: 1.2rem 3.5rem; font-size: 1rem; font-weight: 900; text-transform: uppercase;
+            letter-spacing: 2px; border-radius: 50px; cursor: pointer; 
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            margin-top: 3rem; display: inline-block; pointer-events: auto;
+          }
+          .btn-primary:hover {
+            transform: translateY(-8px) scale(1.05); 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 30px var(--theme-color);
+            background: #fff;
+          }
 
-      <nav className="navbar">
-        <div className="logo">GEFORCE<span className="logo-dot">.</span></div>
-        <div className="nav-links">
-          <span>Visão Geral</span>
-          <span>Desempenho</span>
-          <span>Specs</span>
+          /* Loader High-Tech */
+          .loader-container { display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-dark); width: 100vw; height: 100vh; position: absolute; top: -50vh; left: -50vw; z-index: 9999; }
+          .loader-glitch { font-size: 3rem; font-weight: 900; letter-spacing: 10px; margin-bottom: 30px; color: #fff; position: relative; }
+          .loader-bar-bg { width: 400px; max-width: 80vw; height: 2px; background: rgba(255,255,255,0.05); margin-bottom: 20px; position: relative; overflow: hidden; }
+          .loader-bar-fill { height: 100%; transition: width 0.2s ease, background 0.5s ease; }
+          .loader-text { font-family: monospace; font-size: 0.85rem; letter-spacing: 3px; text-transform: uppercase; transition: color 0.5s ease; }
+
+          /* Media Queries para Mobile */
+          @media (max-width: 768px) {
+            .nav-links { display: none; }
+            .navbar { padding: 1.5rem 5%; }
+            .section-content { justify-content: center !important; text-align: center !important; }
+            .glass-panel { padding: 2.5rem 1.5rem; background: rgba(5,5,8,0.7); max-width: 100%; }
+            .specs-grid { border-top: none; padding-top: 1rem; }
+            .theme-controller { bottom: 20px; left: 50%; transform: translateX(-50%); width: max-content; }
+          }
+        `}</style>
+
+        {/* ==========================================
+            9. INTERFACE HTML PERMANENTE
+            ========================================== */}
+        <div className="reading-progress" ref={progressRef}>
+          <div className="reading-progress-fill"></div>
         </div>
-      </nav>
 
-      {/* ==========================================
-          7. O PALCO 3D (CANVAS)
-          ========================================== */}
-      <div className="canvas-container">
-        <Canvas>
-          <PerspectiveCamera makeDefault position={[0, 0, 8]} fov={isMobile ? 60 : 45} />
-          
-          {/* Iluminação Complexa e Realista */}
-          <Environment preset="night" />
-          <ambientLight intensity={0.1} />
-          <directionalLight position={[10, 20, 10]} intensity={2} color="#ffffff" castShadow />
-          <directionalLight position={[-10, -20, -10]} intensity={1} color="#76b900" />
-          
-          {/* Luzes de Spot focadas para criar brilho no metal */}
-          <spotLight position={[0, 5, 5]} angle={0.3} penumbra={0.8} intensity={5} color="#ffffff" />
-          <spotLight position={[5, 0, -5]} angle={0.5} penumbra={1} intensity={10} color="#76b900" />
+        <NavBar currentTheme={currentTheme} />
+        <ThemeController />
 
-          {/* Partículas flutuantes (Poeira estelar / Cyber) */}
-          <Sparkles count={isMobile ? 100 : 300} scale={15} size={1.5} speed={0.3} opacity={0.4} color="#76b900" />
-          
-          {/* Sombra de contato profunda */}
-          <ContactShadows position={[0, -2.5, 0]} opacity={0.7} scale={20} blur={2.5} far={4} color="#000000" />
+        {/* ==========================================
+            10. O PALCO 3D PERMANENTE
+            ========================================== */}
+        <div className="canvas-container">
+          <Canvas>
+            <PerspectiveCamera makeDefault position={[0, 0, 8]} fov={isMobile ? 60 : 45} />
+            <SceneLighting isMobile={isMobile} />
+            
+            <Suspense fallback={<Loader />}>
+              <GpuModel isMobile={isMobile} />
+            </Suspense>
+          </Canvas>
+        </div>
 
-          {/* Carrega o modelo com fallback para o nosso Loader Customizado */}
-          <Suspense fallback={<Loader />}>
-            <GpuModel isMobile={isMobile} />
-          </Suspense>
-        </Canvas>
-      </div>
-
-      {/* ==========================================
-          8. SEÇÕES HTML DINÂMICAS (Animadas pelo GSAP)
-          ========================================== */}
-      
-      {/* SEÇÃO 1: HERO */}
-      <div className="ui-layer" ref={section1Ref}>
-        <div className="section-content" style={{ justifyContent: 'flex-start' }}>
-          <div className="glass-panel">
-            <span className="tagline">Arquitetura Ada Lovelace</span>
-            <h1>A Placa <br/>Definitiva.</h1>
-            <p>Prepare-se para o ápice do design térmico e da potência gráfica. A <span className="highlight">GeForce RTX™ 4090</span> muda as regras do jogo e da criação de conteúdo para sempre.</p>
+        {/* ==========================================
+            11. SEÇÕES DINÂMICAS DO SITE (SCROLL)
+            ========================================== */}
+        
+        {/* SEÇÃO 1: HERO */}
+        <div className="ui-layer" ref={sectionRefs[0]}>
+          <div className="section-content" style={{ justifyContent: 'flex-start' }}>
+            <div className="glass-panel">
+              <span className="tagline">Arquitetura Ada Lovelace</span>
+              <h1>A Placa <br/>Definitiva.</h1>
+              <p>Prepare-se para o ápice do design térmico e da potência gráfica. A <span className="text-highlight">GeForce RTX™ 4090</span> muda as regras do jogo, da criação de conteúdo e do processamento de Inteligência Artificial.</p>
+              <button className="btn-primary" onClick={() => window.scrollTo({top: window.innerHeight * 4, behavior: 'smooth'})}>
+                Explorar Compra
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* SEÇÃO 2: DESEMPENHO (Esquerda) */}
-      <div className="ui-layer" ref={section2Ref} style={{ opacity: 0 }}>
-        <div className="section-content" style={{ justifyContent: 'flex-end', textAlign: isMobile ? 'center' : 'right' }}>
-          <div className="glass-panel" style={{ border: 'none', background: 'transparent', padding: 0 }}>
-            <span className="tagline">Força Bruta</span>
-            <h2>O Dobro de <br/><span className="text-green">Performance.</span></h2>
-            <p>Novos multiprocessadores de streaming e núcleos Tensor de 4ª geração garantem um salto quântico em IA e renderização.</p>
-            <div className="specs-grid" style={{ textAlign: 'left' }}>
-              <div className="spec-item">
-                <span className="spec-value">24<span style={{ fontSize: '1rem' }}>GB</span></span>
-                <span className="spec-label">GDDR6X VRAM</span>
-              </div>
-              <div className="spec-item">
-                <span className="spec-value">16384</span>
-                <span className="spec-label">NVIDIA CUDA® Cores</span>
+        {/* SEÇÃO 2: DESEMPENHO BRUTO */}
+        <div className="ui-layer" ref={sectionRefs[1]} style={{ opacity: 0 }}>
+          <div className="section-content" style={{ justifyContent: 'flex-end', textAlign: isMobile ? 'center' : 'right' }}>
+            <div className="glass-panel" style={{ background: 'transparent', border: 'none', boxShadow: 'none' }}>
+              <span className="tagline">Força Computacional</span>
+              <h2>O Dobro de <br/><span className="text-theme">Performance.</span></h2>
+              <p>Novos multiprocessadores de streaming e núcleos Tensor de 4ª geração garantem um salto quântico. Experimente o poder que quebra os limites do fotorrealismo em tempo real.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* SEÇÃO 3: ENGENHARIA E REFRIGERAÇÃO */}
+        <div className="ui-layer" ref={sectionRefs[2]} style={{ opacity: 0 }}>
+          <div className="section-content" style={{ justifyContent: 'flex-start' }}>
+            <div className="glass-panel">
+              <span className="tagline">Engenharia Térmica</span>
+              <h2>Frio.<br/>Silencioso.<br/><span className="text-theme">Implacável.</span></h2>
+              <p>Ventoinhas duplas de fluxo axial maiores e uma câmara de vapor redesenhada. Aumentamos o fluxo de ar em 20% para manter o poder máximo em silêncio absoluto, independentemente da carga térmica exigida pelos motores de renderização.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* SEÇÃO 4: ESPECIFICAÇÕES TÉCNICAS */}
+        <div className="ui-layer" ref={sectionRefs[3]} style={{ opacity: 0 }}>
+          <div className="section-content" style={{ justifyContent: 'center', textAlign: 'center' }}>
+            <div className="glass-panel" style={{ maxWidth: '800px', background: 'var(--bg-dark)', border: '1px solid var(--theme-color)' }}>
+              <span className="tagline">Sob o Capô</span>
+              <h2 style={{ fontSize: 'clamp(2rem, 5vw, 3.5rem)' }}>Especificações da <span className="text-theme">Fera</span>.</h2>
+              <div className="specs-grid">
+                <div className="spec-item">
+                  <span className="spec-value">24<span style={{ fontSize: '1.2rem', color: 'var(--text-muted)' }}>GB</span></span>
+                  <span className="spec-label">GDDR6X VRAM</span>
+                </div>
+                <div className="spec-item">
+                  <span className="spec-value">16384</span>
+                  <span className="spec-label">NVIDIA CUDA® Cores</span>
+                </div>
+                <div className="spec-item">
+                  <span className="spec-value">2.52<span style={{ fontSize: '1.2rem', color: 'var(--text-muted)' }}>GHz</span></span>
+                  <span className="spec-label">Boost Clock</span>
+                </div>
+                <div className="spec-item">
+                  <span className="spec-value">3rd Gen</span>
+                  <span className="spec-label">RT Cores</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* SEÇÃO 3: REFRIGERAÇÃO (Direita) */}
-      <div className="ui-layer" ref={section3Ref} style={{ opacity: 0 }}>
-        <div className="section-content" style={{ justifyContent: 'flex-start' }}>
-          <div className="glass-panel">
-            <span className="tagline">Engenharia Térmica</span>
-            <h2>Frio. Silencioso.<br/>Implacável.</h2>
-            <p>Ventoinhas duplas de fluxo axial maiores e uma câmara de vapor redesenhada. Aumentamos o fluxo de ar em 20% para manter o poder máximo em silêncio absoluto, mesmo sob carga extrema.</p>
+        {/* SEÇÃO 5: COMPRAR / FINAL (FOOTER GIGANTE) */}
+        <div className="ui-layer" ref={sectionRefs[4]} style={{ opacity: 0 }}>
+          <div className="section-content" style={{ justifyContent: 'center', textAlign: 'center' }}>
+            <div>
+              <h1 style={{ fontSize: 'clamp(5rem, 12vw, 10rem)', marginBottom: 0, textShadow: '0 20px 50px rgba(0,0,0,0.8)' }}>
+                RTX <span className="text-theme">4090</span>
+              </h1>
+              <p style={{ fontSize: '1.8rem', color: '#fff', marginTop: '1rem', fontWeight: 200, letterSpacing: '2px' }}>
+                O Futuro já está renderizado.
+              </p>
+              <button className="btn-primary" style={{ padding: '1.5rem 5rem', fontSize: '1.2rem', marginTop: '4rem' }}>
+                Adicionar ao Carrinho
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* SEÇÃO 4: RAY TRACING (Centro) */}
-      <div className="ui-layer" ref={section4Ref} style={{ opacity: 0 }}>
-        <div className="section-content" style={{ justifyContent: 'center', textAlign: 'center' }}>
-          <div className="glass-panel" style={{ maxWidth: '800px', background: 'radial-gradient(circle, rgba(118,185,0,0.1) 0%, transparent 70%)', border: 'none' }}>
-            <span className="tagline">Hyper-Realismo</span>
-            <h2 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)' }}>Ray Tracing.</h2>
-            <p style={{ maxWidth: '600px', margin: '0 auto' }}>A arquitetura Ada libera toda a glória do Ray Tracing, simulando o comportamento da luz no mundo real. Experimente mundos virtuais com detalhes sem precedentes.</p>
-          </div>
-        </div>
       </div>
-
-      {/* SEÇÃO 5: COMPRAR / FINAL (Centro) */}
-      <div className="ui-layer" ref={section5Ref} style={{ opacity: 0 }}>
-        <div className="section-content" style={{ justifyContent: 'center', textAlign: 'center' }}>
-          <div>
-            <h1 style={{ fontSize: 'clamp(4rem, 10vw, 8rem)', marginBottom: 0, textShadow: '0 20px 50px rgba(0,0,0,0.9)' }}>
-              RTX <span className="text-green">4090</span>
-            </h1>
-            <p style={{ fontSize: '1.5rem', color: '#fff', marginTop: '1rem', fontWeight: 400 }}>O Futuro já está renderizado.</p>
-            <button className="btn-primary">Garantir a Minha</button>
-          </div>
-        </div>
-      </div>
-
-    </div>
+    </ThemeContext.Provider>
   );
 }
